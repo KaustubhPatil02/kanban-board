@@ -1,90 +1,138 @@
-import React, { useState } from "react";
-import "./App.css";
-
-const initialData = [
-  {
-    id: "1",
-    title: "To Do",
-    tasks: [
-      { id: "1", content: "Task 1" },
-      { id: "2", content: "Task 2" },
-    ],
-  },
-  {
-    id: "2",
-    title: "In Progress",
-    tasks: [
-      { id: "3", content: "Task 3" },
-    ],
-  },
-  {
-    id: "3",
-    title: "Done",
-    tasks: [
-      { id: "4", content: "Task 4" },
-    ],
-  },
-];
+import React, { useState, useEffect } from "react";
+import Auth from "./components/Auth";
+import { auth, db } from "./firebase/firebaseConfig";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import {
+  collection,
+  addDoc,
+  onSnapshot,
+  updateDoc,
+  deleteDoc,
+  doc,
+} from "firebase/firestore";
 
 export default function App() {
-  const [columns, setColumns] = useState(initialData);
+  const [user, setUser] = useState(null);
+  const [tasks, setTasks] = useState([]);
+  const [taskText, setTaskText] = useState("");
 
-  const onDragStart = (e, taskId) => {
-    e.dataTransfer.setData("taskId", taskId);
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (user) {
+      const tasksRef = collection(db, "tasks");
+      const unsubscribe = onSnapshot(tasksRef, (snapshot) => {
+        const userTasks = snapshot.docs
+          .filter((doc) => doc.data().createdBy === user.uid)
+          .map((doc) => ({ id: doc.id, ...doc.data() }));
+        setTasks(userTasks);
+      });
+      return () => unsubscribe();
+    }
+  }, [user]);
+
+  const addTask = async () => {
+    if (!taskText) return;
+    const tasksRef = collection(db, "tasks");
+    await addDoc(tasksRef, {
+      text: taskText,
+      status: "Todo",
+      createdBy: user.uid,
+      timestamp: Date.now(),
+    });
+    setTaskText("");
   };
 
-  const onDragOver = (e) => {
-    e.preventDefault();
+  const updateTask = async (id, status) => {
+    const taskRef = doc(db, "tasks", id);
+    await updateDoc(taskRef, { status });
   };
 
-  const onDrop = (e, columnId) => {
-    const taskId = e.dataTransfer.getData("taskId");
-
-    const sourceColumn = columns.find((col) =>
-      col.tasks.some((task) => task.id === taskId)
-    );
-    const task = sourceColumn.tasks.find((t) => t.id === taskId);
-
-    const updatedSourceTasks = sourceColumn.tasks.filter((t) => t.id !== taskId);
-    const updatedSourceColumn = { ...sourceColumn, tasks: updatedSourceTasks };
-
-    const targetColumn = columns.find((col) => col.id === columnId);
-    const updatedTargetTasks = [...targetColumn.tasks, task];
-    const updatedTargetColumn = { ...targetColumn, tasks: updatedTargetTasks };
-
-    setColumns(
-      columns.map((col) => {
-        if (col.id === sourceColumn.id) return updatedSourceColumn;
-        if (col.id === targetColumn.id) return updatedTargetColumn;
-        return col;
-      })
-    );
+  const deleteTask = async (id) => {
+    const taskRef = doc(db, "tasks", id);
+    await deleteDoc(taskRef);
   };
+
+  if (!user) return <Auth setUser={setUser} />;
 
   return (
-    <div className="flex w-screen h-screen p-4 space-x-4 bg-gray-100">
-      {columns.map((column) => (
-        <div
-          key={column.id}
-          className="flex flex-col w-1/3 p-4 space-y-4 bg-white rounded shadow"
-          onDragOver={onDragOver}
-          onDrop={(e) => onDrop(e, column.id)}
-        >
-          <h2 className="text-xl font-semibold text-center text-gray-700">
-            {column.title}
-          </h2>
-          {column.tasks.map((task) => (
-            <div
-              key={task.id}
-              draggable
-              onDragStart={(e) => onDragStart(e, task.id)}
-              className="p-4 text-sm text-gray-800 bg-gray-200 rounded shadow cursor-pointer hover:bg-gray-300"
-            >
-              {task.content}
-            </div>
-          ))}
+    <div className="p-4">
+      {/* User Profile */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center space-x-4">
+          <img
+            src={user.photoURL || "https://via.placeholder.com/40"}
+            alt="Profile"
+            className="w-10 h-10 rounded-full"
+          />
+          <p>{user.displayName || "User"}</p>
         </div>
-      ))}
+        <button
+        className="px-4 py-2 mb-4 font-bold text-white bg-red-500 rounded hover:bg-red-700"
+        onClick={() => signOut(auth)}
+      >
+        Sign Out
+      </button>
+        </div>
+      
+
+      <div className="flex gap-4">
+        <input
+          type="text"
+          className="w-full px-3 py-2 border rounded"
+          placeholder="Add a new task"
+          value={taskText}
+          onChange={(e) => setTaskText(e.target.value)}
+        />
+        <button
+          className="px-4 py-2 font-bold text-white bg-green-500 rounded hover:bg-green-700"
+          onClick={addTask}
+        >
+          Add Task
+        </button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4 mt-6">
+        {["Todo", "In Progress", "Done"].map((status) => (
+          <div key={status} className="p-4 border rounded">
+            <h3 className="mb-4 font-bold">{status}</h3>
+            {tasks
+              .filter((task) => task.status === status)
+              .map((task) => (
+                <div
+                  key={task.id}
+                  className="p-2 mb-2 bg-gray-100 rounded shadow"
+                >
+                  <p>{task.text}</p>
+                  {status !== "Done" && (
+                    <button
+                      className="text-blue-500"
+                      onClick={() =>
+                        updateTask(
+                          task.id,
+                          status === "Todo" ? "In Progress" : "Done"
+                        )
+                      }
+                    >
+                      Move to {status === "Todo" ? "In Progress" : "Done"}
+                    </button>
+                  )}
+                  <button
+                    className="ml-2 text-red-500"
+                    onClick={() => deleteTask(task.id)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              ))}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
